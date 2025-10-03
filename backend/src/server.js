@@ -1,7 +1,8 @@
 import express, { urlencoded } from "express"
 import cors from "cors"
 import cookieParser from "cookie-parser"
-import dotenv from "dotenv/config"
+import { ENV } from "./config/env.js"
+import { connectDB } from "./config/db.js"
 
 const app = express()
 app.use(cors({
@@ -20,10 +21,16 @@ import userRouter from './routes/user.routes.js'
 app.use("/api/v1/users", userRouter)
 
 
-const startServer = ()=>{
-    app.listen(process.env.PORT, () => {
-      console.log(`Server running on port ${process.env.PORT}`);
+const startServer = async()=>{
+  try {
+    await connectDB();
+    app.listen(ENV.PORT, () => {
+      console.log(`Server running on port ${ENV.PORT}`);
     });
+  } catch (error) {
+    console.log("Error connecting to Server",error);
+    process.exit(1)
+  }
 }
 
 startServer()
