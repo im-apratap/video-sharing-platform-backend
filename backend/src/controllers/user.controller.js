@@ -16,7 +16,8 @@ const generateAccessAndRefreshTokens = async (userId) => {
     user.refreshToken = refreshToken;
     await user.save({ validateBeforeSave: false });
 
-    return { accessToken, refreshToken };
+    // return both names to match callers
+    return { accessToken, refreshToken, newRefreshToken: refreshToken };
   } catch (error) {
     throw new ApiError(
       500,
@@ -98,25 +99,32 @@ const registerUser = asyncHandler(async (req, res) => {
 });
 
 const loginUser = asyncHandler(async (req, res) => {
-  /* req body -> data
-    username or email
-    find the user
-    password check
-    access and refresh token
-    send cookie */
+  const { email, username, password } = req.body || {};
 
-  const { email, username, password } = req.body;
+  if (!req.body || Object.keys(req.body).length === 0) {
+    throw new ApiError(
+      400,
+      "Request body is empty. Send JSON (Content-Type: application/json) or x-www-form-urlencoded."
+    );
+  }
 
   if (!(username || email)) {
     throw new ApiError(400, "username or email is required");
   }
 
+  if (!password) {
+    throw new ApiError(400, "password is required");
+  }
+
   const user = await User.findOne({
-    $or: [{ username }, { email }],
+    $or: [
+      { username: username?.toLowerCase() },
+      { email: email?.toLowerCase() },
+    ],
   });
 
   if (!user) {
-    throw new ApiError(404, "User doesn't exists");
+    throw new ApiError(404, "User doesn't exist");
   }
 
   const isPasswordValid = await user.isPasswordCorrect(password);
@@ -133,15 +141,16 @@ const loginUser = asyncHandler(async (req, res) => {
     "-password -refreshToken"
   );
 
-  const options = {
-    httpOnly: true, // by this cookies wil only be modifiable by server. anyone can see that but can't modify it
-    secure: true,
+  const cookieOptions = {
+    httpOnly: true,
+    secure: ENV.NODE_ENV === "production",
+    sameSite: ENV.NODE_ENV === "production" ? "none" : "lax",
   };
 
   return res
     .status(200)
-    .cookie("accessToken", accessToken, options)
-    .cookie("refreshToken", refreshToken, options)
+    .cookie("accessToken", accessToken, cookieOptions)
+    .cookie("refreshToken", refreshToken, cookieOptions)
     .json(
       new ApiResponse(
         200,
@@ -156,11 +165,16 @@ const loginUser = asyncHandler(async (req, res) => {
 });
 
 const logoutUser = asyncHandler(async (req, res) => {
+  // clear refresh token in DB
+  if (!req.user?._id) {
+    throw new ApiError(401, "Unauthorized request");
+  }
+
   await User.findByIdAndUpdate(
     req.user._id,
     {
-      $set: {
-        refreshToken: undefined,
+      $unset: {
+        refreshToken: 1,
       },
     },
     {
@@ -168,15 +182,15 @@ const logoutUser = asyncHandler(async (req, res) => {
     }
   );
 
-  const options = {
+  const cookieOptions = {
     httpOnly: true,
-    secure: true,
+    secure: true
   };
 
   return res
     .status(200)
-    .clearCookie("accessToken")
-    .clearCookie("refreshToken")
+    .clearCookie("accessToken", cookieOptions)
+    .clearCookie("refreshToken", cookieOptions)
     .json(new ApiResponse(200, {}, "User logged out successfully"));
 });
 
@@ -256,9 +270,9 @@ const getCurrentUser = asyncHandler(async (req, res) => {
 });
 
 const updateAccountDetails = asyncHandler(async (req, res) => {
-  const { fullname, email } = req.body;
+  const { fullname, email, username } = req.body;
 
-  if (!fullname || !email) {
+  if (!fullname || !email || !username) {
     throw new ApiError(400, "All fields are required");
   }
 
@@ -268,6 +282,7 @@ const updateAccountDetails = asyncHandler(async (req, res) => {
       $set: {
         fullname,
         email,
+        username
       },
     },
     { new: true } // by this the value which got updated is returned
@@ -405,12 +420,12 @@ const getUserChannelProfile = asyncHandler(async (req, res) => {
     );
 });
 
-const getWatchHistory = asyncHandler(async(req,res)=>{
+const getWatchHistory = asyncHandler(async (req, res) => {
   const user = await User.aggregate([
     {
       $match: {
-        _id: new mongoose.Types.ObjectId(String(req.user._id))
-      }
+        _id: mongoose.Types.ObjectId(String(req.user._id)),
+      },
     },
     {
       $lookup: {
@@ -430,27 +445,34 @@ const getWatchHistory = asyncHandler(async(req,res)=>{
                   $project: {
                     fullname: 1,
                     username: 1,
-                    avatar: 1
-                  }
-                }
-              ]
-            }
+                    avatar: 1,
+                  },
+                },
+              ],
+            },
           },
           {
             $addFields: {
               owner: {
-                $first: "$owner"
-              }
-            }
-          }
-        ]
-      }
-    }
-  ])
+                $first: "$owner",
+              },
+            },
+          },
+        ],
+      },
+    },
+  ]);
 
-  return res.status(200)
-  .json(new ApiResponse(200, user[0].watchHistory, "Watch History fetched successfully"))
-})
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        user[0].watchHistory,
+        "Watch History fetched successfully"
+      )
+    );
+});
 
 export {
   registerUser,
@@ -463,5 +485,5 @@ export {
   updateUserAvatar,
   updateUserCoverImage,
   getUserChannelProfile,
-  getWatchHistory
+  getWatchHistory,
 };
